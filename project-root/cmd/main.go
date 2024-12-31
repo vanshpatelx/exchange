@@ -4,46 +4,47 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"os/signal"
 	"project/pkg/cache"
 	"project/pkg/exchange"
 	"project/pkg/models"
 	"project/pkg/pubsub"
+	"project/pkg/config"
+	"syscall"
 )
 
 func main() {
-	redisURL := "localhost:6379"
-	cacheInstance := cache.NewCache(redisURL)
+	config, err := config.LoadConfig()
+	if err != nil {
+		log.Fatalf("Failed to load configuration: %v", err)
+	}
 
-	rabbitMQURL := "amqp://guest:guest@localhost:5672/"
-	pubsubInstance, err := pubsub.NewPubSub(rabbitMQURL)
+	cacheInstance1 := cache.NewCache(config.REDIS_URL1)
+	cacheInstance2 := cache.NewCache(config.REDIS_URL2)
+
+	pubsubInstance, err := pubsub.NewPubSub(config.RABBITMQ_URL)
 	if err != nil {
 		log.Fatalf("Failed to create PubSub instance: %v", err)
 	}
 
-	exchangeInstance := exchange.NewExchange(redisURL, pubsubInstance, cacheInstance)
+	exchangeInstance := exchange.NewExchange(pubsubInstance, cacheInstance1, cacheInstance2, config)
 
-	go subscribeToAddOrderMatchQueue(pubsubInstance, exchangeInstance)
+	go subscribeToAddOrderMatchQueue(pubsubInstance, exchangeInstance, config)
 
-	select {}
+	gracefulShutdown()
 }
 
-type Order struct {
-	Id       int     `json:"id"`
-	StockId  int     `json:"stock_id"`
-	Type     string  `json:"type"`
-	Quantity int     `json:"quantity"`
-	Price    float64 `json:"price"`
-	UserId   int     `json:"user_id"`
-}
 
-func subscribeToAddOrderMatchQueue(pubsubInstance *pubsub.PubSub, exchangeInstance *exchange.Exchange) {
-	msgs, err := pubsubInstance.Subscribe("addOrderMatch")
+func subscribeToAddOrderMatchQueue(pubsubInstance *pubsub.PubSub, exchangeInstance *exchange.Exchange, config *models.Config) {
+	msgs, err := pubsubInstance.Subscribe(config.SUBSCRIBER_QUEUE)
 	if err != nil {
 		log.Fatalf("Failed to subscribe to addOrderMatch queue: %v", err)
 	}
 
+	// Process messages concurrently
 	for msg := range msgs {
-		processOrderMessage(msg.Body, exchangeInstance)
+		go processOrderMessage(msg.Body, exchangeInstance)
 	}
 }
 
@@ -55,10 +56,33 @@ func processOrderMessage(msgBody []byte, exchangeInstance *exchange.Exchange) {
 		return
 	}
 
+	// Handle different tas
 	switch exchangeMsg.Task {
-	case 0: exchangeInstance.PlaceOrder(&exchangeMsg.Order) //order
-	case 1: // settlement
+	case 0:
+		// Place an order
+		exchangeInstance.PlaceOrder(&exchangeMsg.Order)
+	case 1:
+		// Handle settlement
+		log.Printf("Settlement task received for order ID: %d", exchangeMsg.Order.Id)
+	default:
+		log.Printf("Unknown task type: %d", exchangeMsg.Task)
 	}
 
 	fmt.Printf("Processed order for stock: %d, User: %d, Quantity: %d, Type: %d\n", exchangeMsg.Order.Ticker, exchangeMsg.Order.User, exchangeMsg.Order.Quantity, exchangeMsg.Order.Type)
+}
+
+
+func gracefulShutdown() {
+	done := make(chan bool)
+
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		<-sigs
+		log.Println("Received termination signal. Shutting down...")
+		done <- true 
+	}()
+
+	<-done
 }

@@ -3,23 +3,27 @@ package exchange
 import (
 	"project/pkg/cache"
 	"project/pkg/models"
-	"project/pkg/stockmanager"
 	"project/pkg/pubsub"
+	"project/pkg/stockmanager"
 	"sync"
 )
 
 type Exchange struct {
 	StockManagers map[int]*stockmanager.StockManager
 	mu            sync.RWMutex
-	cache         *cache.Cache
+	cache1        *cache.Cache
+	cache2        *cache.Cache
 	pubsub        *pubsub.PubSub
+	config        *models.Config
 }
 
-func NewExchange(redisURL string, pubsub *pubsub.PubSub, cache *cache.Cache) *Exchange {
+func NewExchange(pubsub *pubsub.PubSub, cache1 *cache.Cache, cache2 *cache.Cache, config *models.Config) *Exchange {
 	return &Exchange{
 		StockManagers: make(map[int]*stockmanager.StockManager),
-		cache:         cache,
+		cache1:        cache1,
+		cache2:        cache2,
 		pubsub:        pubsub,
+		config:        config,
 	}
 }
 
@@ -28,7 +32,7 @@ func (e *Exchange) AddStock(Ticker int) {
 	defer e.mu.Unlock()
 
 	if _, exists := e.StockManagers[Ticker]; !exists {
-		e.StockManagers[Ticker] = stockmanager.NewStockManager(Ticker, e.cache, e.pubsub)
+		e.StockManagers[Ticker] = stockmanager.NewStockManager(Ticker, e.cache1, e.cache2, e.pubsub, e.config)
 	}
 }
 

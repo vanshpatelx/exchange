@@ -4,11 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"project/pkg/cache"
+	"project/pkg/idgen"
 	"project/pkg/models"
 	"project/pkg/pubsub"
 	"project/pkg/queue"
 	"sync"
-    "project/pkg/idgen"
 )
 
 type StockManager struct {
@@ -16,17 +16,21 @@ type StockManager struct {
 	BuyQueue  *queue.PriorityQueue
 	SellQueue *queue.PriorityQueue
 	mu        sync.Mutex
-	cache     *cache.Cache
+	cache1    *cache.Cache
+	cache2    *cache.Cache
 	pubsub    *pubsub.PubSub
+	config    *models.Config
 }
 
-func NewStockManager(Ticker int, cache *cache.Cache, pubsub *pubsub.PubSub) *StockManager {
+func NewStockManager(Ticker int, cache1 *cache.Cache, cache2 *cache.Cache, pubsub *pubsub.PubSub, config *models.Config) *StockManager {
 	return &StockManager{
 		Ticker:    Ticker,
 		BuyQueue:  queue.NewPriorityQueue(),
 		SellQueue: queue.NewPriorityQueue(),
-		cache:     cache,
+		cache1:    cache1,
+		cache2:    cache2,
 		pubsub:    pubsub,
+		config:    config,
 	}
 }
 
@@ -94,44 +98,37 @@ func (sm *StockManager) publishTradeEvent(buyOrder, sellOrder *models.Order, tra
 		return
 	}
 
-	err = sm.pubsub.Publish("trade_exchange", "trade_event", string(message))
+	err = sm.pubsub.Publish(sm.config.PUBLISHER_EXCHANGE, sm.config.PUBLISHER_ROUTING_KEY, string(message))
 	if err != nil {
 		fmt.Printf("Error publishing trade event: %s\n", err)
 	}
 }
-
 func (sm *StockManager) SettlePartialTrade(buyOrder, sellOrder *models.Order, tradeQuantity int, tradePrice int) bool {
-	buyAmount := tradePrice * tradeQuantity
-	sellAmount := tradePrice * tradeQuantity
+	amount := tradePrice * tradeQuantity
 
-
-	
-
-	buyBalance, err := sm.cache.GetBalance(buyOrder.User)
-	if err != nil {
-		fmt.Printf("Error fetching buyer balance: %v\n", err)
+	// buyer's balance
+	if !sm.cache1.SetBalance(buyOrder.User, amount, false) {
 		return false
 	}
 
-	sellBalance, err := sm.cache.GetBalance(sellOrder.User)
-	if err != nil {
-		fmt.Printf("Error fetching seller balance: %v\n", err)
+	// seller's balance
+	if !sm.cache1.SetBalance(sellOrder.User, -amount, false) {
+		sm.cache1.SetBalance(buyOrder.User, -amount, true) // Rollback
 		return false
 	}
 
-	if buyBalance < int(buyAmount) {
-		fmt.Println("Insufficient balance for trade")
+	// buyer's holdings
+	if !sm.cache2.SetStock(buyOrder.User, buyOrder.Id, tradeQuantity, tradePrice, false) {
+		sm.cache1.SetBalance(buyOrder.User, -amount, true) // Rollback
+		sm.cache1.SetBalance(sellOrder.User, amount, true)
 		return false
 	}
 
-	if err := sm.cache.SetBalance(buyOrder.User, buyBalance-int(buyAmount)); err != nil {
-		fmt.Printf("Error updating buyer balance: %v\n", err)
-		return false
-	}
-
-	if err := sm.cache.SetBalance(sellOrder.User, sellBalance+int(sellAmount)); err != nil {
-		fmt.Printf("Error updating seller balance: %v\n", err)
-		sm.cache.SetBalance(buyOrder.User, buyBalance) // Attempt rollback
+	// seller's holdings
+	if !sm.cache2.SetStock(sellOrder.User, sellOrder.Id, -tradeQuantity, tradePrice, false) {
+		sm.cache1.SetBalance(buyOrder.User, -amount, true) // Rollback
+		sm.cache1.SetBalance(sellOrder.User, amount, true)
+		sm.cache2.SetStock(buyOrder.User, buyOrder.Id, -tradeQuantity, tradePrice, true)
 		return false
 	}
 

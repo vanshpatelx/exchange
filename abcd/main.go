@@ -106,35 +106,50 @@
 // // connectitvty class => Redis, Publisher also conncted to Main
 
 
+// package main
+
+// import (
+// 	"context"
+// 	"fmt"
+// 	"log"
+// 	"project/pkg/cache"
+
+// )
+
+// func main() {
+// 	redisURL := "localhost:6379"
+// 	cacheInstance := cache.NewCache(redisURL)
+
+// 	ctx := context.Background()
+
+// 	userId := "use123"
+// 	balance := 100.50
+
+// 	err := cacheInstance.SetBalance(ctx, userId, balance)
+
+// 	if err != nil {
+// 		log.Fatalf("Error setting balance: %v", err)
+// 	}
+
+// 	balance, err = cacheInstance.GetBalance(ctx, userId)
+// 	if err != nil {
+// 		log.Fatalf("Error getting balance: %v", err)
+// 	}
+
+// 	fmt.Printf("The balance for user %s is: %.2f\n", userId, balance)
+// }
+
+
 package main
 
 import (
-	"context"
 	"fmt"
-	"log"
-	"project/pkg/cache"
-
+	"strconv"
 )
 
 func main() {
-	redisURL := "localhost:6379"
-	cacheInstance := cache.NewCache(redisURL)
-
-	ctx := context.Background()
-
-	userId := "use123"
-	balance := 100.50
-
-	err := cacheInstance.SetBalance(ctx, userId, balance)
-
-	if err != nil {
-		log.Fatalf("Error setting balance: %v", err)
-	}
-
-	balance, err = cacheInstance.GetBalance(ctx, userId)
-	if err != nil {
-		log.Fatalf("Error getting balance: %v", err)
-	}
-
-	fmt.Printf("The balance for user %s is: %.2f\n", userId, balance)
+	amount := -500
+	userBalance := strconv.FormatInt(int64(amount), 10)
+	fmt.Println(userBalance) // Output: "-500"
+	
 }
