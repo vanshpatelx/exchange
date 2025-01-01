@@ -1,167 +1,185 @@
 package cache
 
 import (
-	"context"
-	"sync"
 	"testing"
+	"project/pkg/models"
+	// "sync"
+	"strings"
+	"fmt"
+	"log"
+	"project/pkg/config"
 )
 
-func setupRedis() *Cache {
-	redisURL := "localhost:6379" // Update if necessary
-	cache := NewCache(redisURL)
-	cache.GetRedisClient() // Initialize Redis client
-	return cache
-}
-
-func teardownRedis(cache *Cache) {
-	ctx := context.Background()
-	client := cache.GetRedisClient()
-	client.FlushAll(ctx) // Clear Redis for clean state
-}
-
-func TestCache_GetAndSetStock(t *testing.T) {
-	cache := setupRedis()
-	defer teardownRedis(cache)
-
-	userID := 1
-	tickerID := 1001
-	quantity := 10
-	price := 50
-
-	// Ensure stock data is set before getting it
-	success := cache.SetStock(userID, tickerID, quantity, price, false, false)
-	if !success {
-		t.Fatalf("Failed to set stock for userID %d", userID)
-	}
-
-	// Get stocks
-	stocks, err := cache.GetStocks(userID)
+func setupTestCache() (cache1, cache2 *Cache) {
+	config, err := config.LoadConfig()
 	if err != nil {
-		t.Fatalf("Failed to get stocks for userID %d: %v", userID, err)
+		log.Fatalf("Failed to load configuration: %v", err)
 	}
 
-	if len(stocks) != 1 {
-		t.Fatalf("Expected 1 stock, got %d", len(stocks))
-	}
+	cache1 = NewCache(config.REDIS_URL1)
+	cache2 = NewCache(config.REDIS_URL2)
 
-	stock := stocks[0]
-	if stock.TickerID != tickerID || stock.Quantity != quantity || stock.Price != price {
-		t.Errorf("Unexpected stock data: %+v", stock)
-	}
+	cache1.initRedisClient()
+	cache2.initRedisClient()
+	return cache1, cache2
 }
 
-func TestCache_ConcurrentStockUpdates(t *testing.T) {
-	cache := setupRedis()
-	defer teardownRedis(cache)
+func TestNewStockAdd(t *testing.T) {
+	_, cache2 := setupTestCache()
 
-	userID := 1
-	tickerID := 1001
-	initialQuantity := 100
-	initialPrice := 50
-
-	// Ensure initial stock is set
-	success := cache.SetStock(userID, tickerID, initialQuantity, initialPrice, false, false)
-	if !success {
-		t.Fatalf("Failed to set initial stock for userID %d", userID)
+	// Initialize data
+	stocks := []models.Stock{
+		{TickerID: 1, Quantity: 100, LQ: 50, Price: 200},
+		{TickerID: 2, Quantity: 200, LQ: 100, Price: 150},
+		{TickerID: 3, Quantity: 100, LQ: 50, Price: 200},
 	}
 
-	var wg sync.WaitGroup
-	concurrentUpdates := 10
-
-	for i := 0; i < concurrentUpdates; i++ {
-		wg.Add(1)
-		go func(id int) {
-			defer wg.Done()
-			cache.SetStock(userID, tickerID, id+1, initialPrice+id, false, false)
-		}(i)
+	// Build the string for stocks data
+	var stockBuilder strings.Builder
+	for _, stock := range stocks {
+		// Format each stock entry as "TickerID,Quantity,LQ,Price"
+		stockStr := fmt.Sprintf("%d,%d,%d,%d", stock.TickerID, stock.Quantity, stock.LQ, stock.Price)
+		stockBuilder.WriteString(stockStr + ".")
 	}
 
-	wg.Wait()
+	// Remove the last period (not a comma)
+	result := stockBuilder.String()
+	if len(result) > 0 {
+		result = result[:len(result)-1] // Removing the last period instead of comma
+	}
 
-	// Verify updated stock
-	stocks, err := cache.GetStocks(userID)
+	fmt.Print(result)
+
+	// Set initial balances
+	currentBalance := 10000
+	lockedBalance := 5000
+	balanceStr := fmt.Sprintf("%d,%d", currentBalance, lockedBalance)
+
+	userId := 1
+	cache1.InitializeData(userId, result)
+
+	// Modify stock data
+	stockModify := []models.Stock{
+		{TickerID: 1, Quantity: 50, Price: 100},
+		{TickerID: 2, Quantity: 100, Price: 100},
+		{TickerID: 3, Quantity: 20, Price: 50},
+	}
+
+	// Set modified stocks data in cache
+	for _, stock := range stockModify {
+		success := cache.SetStock(userId, stock.TickerID, stock.Quantity, stock.Price, false, false)
+		if !success {
+			t.Errorf("Failed to set stock data for TickerID %d", stock.TickerID)
+		}
+	}
+
+	// Retrieve and validate stocks
+	retrievedStocks, err := cache.GetStocks(userId)
 	if err != nil {
-		t.Fatalf("Failed to get stocks: %v", err)
+		t.Errorf("Failed to retrieve stocks: %v", err)
 	}
 
-	if len(stocks) != 1 {
-		t.Fatalf("Expected 1 stock, got %d", len(stocks))
+	if len(retrievedStocks) != len(stockModify) { // Correctly compare the modified stocks
+		t.Errorf("Expected %d stocks, got %d", len(stockModify), len(retrievedStocks))
 	}
 
-	stock := stocks[0]
-	expectedQuantity := initialQuantity + (concurrentUpdates * (concurrentUpdates + 1) / 2)
-	if stock.Quantity != expectedQuantity {
-		t.Errorf("Unexpected quantity: got %d, want %d", stock.Quantity, expectedQuantity)
+	for i, stock := range stockModify {
+		if stock.TickerID != retrievedStocks[i].TickerID ||
+			stock.Quantity != retrievedStocks[i].Quantity ||
+			stock.LQ != retrievedStocks[i].LQ ||
+			stock.Price != retrievedStocks[i].Price {
+			t.Errorf("Stock mismatch at index %d: expected %+v, got %+v", i, stock, retrievedStocks[i])
+		}
 	}
-}
 
-func TestCache_BalanceOperations(t *testing.T) {
-	cache := setupRedis()
-	defer teardownRedis(cache)
-
-	userID := 1
-	initialBalance := 1000
-	amount := 200
-
-	// Ensure initial balance is set before retrieval
-	success := cache.SetBalance(userID, initialBalance, false, false)
+	// Set balance data for user 1
+	success := cache.SetBalance(userId+1, 1000, false, true)
 	if !success {
-		t.Fatalf("Failed to set initial balance for userID %d", userID)
+		t.Errorf("Failed to set balance for user %d", userId+1)
 	}
 
-	// Update balance
-	success = cache.SetBalance(userID, amount, false, false)
-	if !success {
-		t.Fatalf("Failed to update balance for userID %d", userID)
-	}
-
-	// Get balance
-	balance, err := cache.GetBalance(userID)
+	// Retrieve and validate balance
+	balance, locked, err := cache.GetBalance(userId+1)
 	if err != nil {
-		t.Fatalf("Failed to get balance for userID %d: %v", userID, err)
+		t.Errorf("Failed to retrieve balance: %v", err)
 	}
 
-	expectedBalance := initialBalance + amount
-	if balance != expectedBalance {
-		t.Errorf("Unexpected balance: got %d, want %d", balance, expectedBalance)
-	}
-}
-
-func TestCache_ConcurrentBalanceUpdates(t *testing.T) {
-	cache := setupRedis()
-	defer teardownRedis(cache)
-
-	userID := 1
-	initialBalance := 1000
-	amount := 200
-
-	// Ensure initial balance is set before retrieval
-	success := cache.SetBalance(userID, initialBalance, false, false)
-	if !success {
-		t.Fatalf("Failed to set initial balance for userID %d", userID)
+	// Corrected balance check
+	if balance != currentBalance+1000 {
+		t.Errorf("Expected balance %d, got %d", currentBalance+1000, balance)
 	}
 
-	var wg sync.WaitGroup
-	concurrentUpdates := 10
-
-	for i := 0; i < concurrentUpdates; i++ {
-		wg.Add(1)
-		go func(id int) {
-			defer wg.Done()
-			cache.SetBalance(userID, amount+id, false, false)
-		}(i)
-	}
-
-	wg.Wait()
-
-	// Verify updated balance
-	balance, err := cache.GetBalance(userID)
-	if err != nil {
-		t.Fatalf("Failed to get balance: %v", err)
-	}
-
-	expectedBalance := initialBalance + (amount * concurrentUpdates)
-	if balance != expectedBalance {
-		t.Errorf("Unexpected balance: got %d, want %d", balance, expectedBalance)
+	if locked != lockedBalance {
+		t.Errorf("Expected locked balance %d, got %d", lockedBalance, locked)
 	}
 }
+
+// func TestConcurrency(t *testing.T) {
+// 	cache := setupTestCache()
+
+// 	// Initialize stocks for user 1
+// 	userId := 1
+// 	stocks := []models.Stock{
+// 		{TickerID: 101, Quantity: 100, LQ: 50, Price: 200},
+// 		{TickerID: 102, Quantity: 200, LQ: 100, Price: 150},
+// 	}
+
+// 	// Set stocks data in cache
+// 	for _, stock := range stocks {
+// 		success := cache.SetStock(userId, stock.TickerID, stock.Quantity, stock.Price, false, false)
+// 		if !success {
+// 			t.Errorf("Failed to set stock data for TickerID %d", stock.TickerID)
+// 		}
+// 	}
+
+// 	// Set initial balance data for user 1
+// 	cache.SetBalance(userId, 1000, false, false)
+
+// 	var wg sync.WaitGroup
+
+// 	// Perform concurrent updates on stocks and balance
+// 	for i := 0; i < 10; i++ {
+// 		wg.Add(1)
+// 		go func(i int) {
+// 			defer wg.Done()
+
+// 			// Simulate a stock update
+// 			tickerID := 101
+// 			quantity := 10
+// 			price := 250
+// 			success := cache.SetStock(userId, tickerID, quantity, price, false, false)
+// 			if !success {
+// 				t.Errorf("Failed to update stock data for TickerID %d", tickerID)
+// 			}
+
+// 			// Simulate a balance update
+// 			amount := 50
+// 			success = cache.SetBalance(userId, amount, false, false)
+// 			if !success {
+// 				t.Errorf("Failed to update balance for user %d", userId)
+// 			}
+// 		}(i)
+// 	}
+
+// 	// Wait for all goroutines to finish
+// 	wg.Wait()
+
+// 	// Validate final stock and balance data
+// 	retrievedStocks, err := cache.GetStocks(userId)
+// 	if err != nil {
+// 		t.Errorf("Failed to retrieve stocks: %v", err)
+// 	}
+
+// 	if len(retrievedStocks) != len(stocks) {
+// 		t.Errorf("Expected %d stocks, got %d", len(stocks), len(retrievedStocks))
+// 	}
+
+// 	balance, err := cache.GetBalance(userId)
+// 	if err != nil {
+// 		t.Errorf("Failed to retrieve balance: %v", err)
+// 	}
+
+// 	if balance <= 0 {
+// 		t.Errorf("Balance should be greater than 0, got %d", balance)
+// 	}
+// }

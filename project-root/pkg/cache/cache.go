@@ -260,24 +260,36 @@ func (c *Cache) SetStock(userId int, tickerID int, quantity int, price int, roll
 	return true
 }
 
-func (c *Cache) GetBalance(userId int) (int, error) {
+func (c *Cache) GetBalance(userId int) (int, int, error) {
 	ctx := context.Background()
 	client := c.GetRedisClient()
 
 	balanceStr, err := client.Get(ctx, strconv.Itoa(userId)).Result()
 	if err != nil {
 		if err == redis.Nil {
-			return 0, nil
+			return 0, 0, nil
 		}
-		return 0, err
+		return 0, 0, err
+	}
+	parts := strings.Split(balanceStr, ",")
+	if len(parts) != 2 {
+		fmt.Printf("Invalid balance format for user %d: %v\n", userId, balanceStr)
+		return 0, 0, err
 	}
 
-	balance, err := strconv.ParseInt(balanceStr, 10, 64) // Base 10, 64-bit
+	currentAmount, err := strconv.Atoi(parts[0]) // Amount
 	if err != nil {
-		return 0, fmt.Errorf("failed to parse balance for user %d: %w", userId, err)
+		fmt.Printf("Invalid amount format for user %d: %v\n", userId, err)
+		return 0, 0, err
 	}
 
-	return int(balance), nil
+	lockedAmount, err := strconv.Atoi(parts[1]) // Locked amount
+	if err != nil {
+		fmt.Printf("Invalid locked amount format for user %d: %v\n", userId, err)
+		return 0, 0, err
+	}
+
+	return int(currentAmount), int(lockedAmount), nil
 }
 
 func (c *Cache) SetBalance(userId int, amount int, rollback bool, settlement bool) bool {
@@ -364,12 +376,12 @@ func (c *Cache) SetBalance(userId int, amount int, rollback bool, settlement boo
 	} else if amount > 0 && rollback {
 		// sell Order Rollback: deduct amount
 		newAmount = currentAmount - amount
-	} else if amount > 0 && !rollback && settlement{
-		//  buyer's Settlement => lock remove and add money to main balance 
+	} else if amount > 0 && !rollback && settlement {
+		//  buyer's Settlement => lock remove and add money to main balance
 		newAmount = currentAmount + amount
 		newLockedAmount = lockedAmount - amount
-	} else if amount > 0 && rollback && settlement{
-		//  buyer's Settlement Rollback => lock remove and add money to main balance 
+	} else if amount > 0 && rollback && settlement {
+		//  buyer's Settlement Rollback => lock remove and add money to main balance
 		newAmount = currentAmount - amount
 		newLockedAmount = lockedAmount + amount
 	}
@@ -411,3 +423,22 @@ func (c *Cache) UnlockResource(userId int, resourceId string) error {
 
 	return nil
 }
+
+func (c *Cache) InitializeStock(userId int, stocksStr string) {
+	ctx := context.Background()
+	client := c.GetRedisClient()
+
+	client.Set(ctx, strconv.Itoa(userId), stocksStr, 0).Err()
+
+	fmt.Printf("Initialized data for user %d\n", userId)
+}
+
+func (c *Cache) InitializeBalance(userId int, balanceStr string) {
+	ctx := context.Background()
+	client := c.GetRedisClient()
+
+	client.Set(ctx, strconv.Itoa(userId), balanceStr, 0).Err()
+
+	fmt.Printf("Initialized data for user %d\n", userId)
+}
+
