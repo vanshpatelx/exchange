@@ -90,7 +90,7 @@ func (c *Cache) GetStocks(userId int) ([]models.Stock, error) {
 
 	return stocks, nil
 }
-func (c *Cache) SetStock(userId int, tickerID int, quantity int, price int, rollback bool) bool {
+func (c *Cache) SetStock(userId int, tickerID int, quantity int, price int, rollback bool, settlement bool) bool {
 	client := c.GetRedisClient()
 	ctx := context.Background()
 
@@ -202,7 +202,15 @@ func (c *Cache) SetStock(userId int, tickerID int, quantity int, price int, roll
 					LQ:       field2,
 					Price:    newPrice,
 				}
-			} else {
+			} else if quantity > 0 && !rollback && settlement {
+				// settlement only add left quantity to main file
+				updatedStock = models.Stock{
+					TickerID: field0,
+					Quantity: field1 + quantity,
+					LQ:       field2 - quantity,
+					Price:    field3,
+				}
+			} else if quantity > 0 && !rollback {
 				// Buy Order: Change in price and main Quantity
 				newQuantity := field1 + quantity
 				newPrice := (field1*field3 + quantity*price) / newQuantity
@@ -272,7 +280,7 @@ func (c *Cache) GetBalance(userId int) (int, error) {
 	return int(balance), nil
 }
 
-func (c *Cache) SetBalance(userId int, amount int, rollback bool) bool {
+func (c *Cache) SetBalance(userId int, amount int, rollback bool, settlement bool) bool {
 	client := c.GetRedisClient()
 	ctx := context.Background()
 
@@ -356,6 +364,14 @@ func (c *Cache) SetBalance(userId int, amount int, rollback bool) bool {
 	} else if amount > 0 && rollback {
 		// sell Order Rollback: deduct amount
 		newAmount = currentAmount - amount
+	} else if amount > 0 && !rollback && settlement{
+		//  buyer's Settlement => lock remove and add money to main balance 
+		newAmount = currentAmount + amount
+		newLockedAmount = lockedAmount - amount
+	} else if amount > 0 && rollback && settlement{
+		//  buyer's Settlement Rollback => lock remove and add money to main balance 
+		newAmount = currentAmount - amount
+		newLockedAmount = lockedAmount + amount
 	}
 
 	updatedBalance := fmt.Sprintf("%d,%d", newAmount, newLockedAmount)

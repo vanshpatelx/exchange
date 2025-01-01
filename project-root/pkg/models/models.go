@@ -3,6 +3,7 @@ package models
 type ExchangeMsg struct {
 	Order Order `json:"order,omitempty"`
 	Task  int   `json:"task"`
+	Ticker   int `json:"ticker,omitempty"`
 }
 
 type Order struct {

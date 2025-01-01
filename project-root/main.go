@@ -63,6 +63,7 @@ func processOrderMessage(msgBody []byte, exchangeInstance *exchange.Exchange) {
 		exchangeInstance.PlaceOrder(&exchangeMsg.Order)
 	case 1:
 		// Handle settlement
+		exchangeInstance.Settlement(exchangeMsg.Ticker)
 		log.Printf("Settlement task received for order ID: %d", exchangeMsg.Order.Id)
 	default:
 		log.Printf("Unknown task type: %d", exchangeMsg.Task)

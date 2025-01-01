@@ -49,3 +49,24 @@ func (e *Exchange) PlaceOrder(order *models.Order) {
 
 	e.mu.Unlock()
 }
+
+func (e *Exchange) Settlement(Ticker int) {
+	e.mu.Lock()
+
+	if manager, exists := e.StockManagers[Ticker]; exists {
+		var wg sync.WaitGroup
+
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done() // Decrease the counter when the goroutine finishes
+			manager.LeftSettlement(Ticker)
+		}()
+
+		wg.Wait()
+
+		delete(e.StockManagers, Ticker)
+	}
+
+	e.mu.Unlock()
+}

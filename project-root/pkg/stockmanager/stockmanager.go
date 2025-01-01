@@ -107,28 +107,28 @@ func (sm *StockManager) SettlePartialTrade(buyOrder, sellOrder *models.Order, tr
 	amount := tradePrice * tradeQuantity
 
 	// buyer's balance
-	if !sm.cache1.SetBalance(buyOrder.User, amount, false) {
+	if !sm.cache1.SetBalance(buyOrder.User, amount, false, false) {
 		return false
 	}
 
 	// seller's balance
-	if !sm.cache1.SetBalance(sellOrder.User, -amount, false) {
-		sm.cache1.SetBalance(buyOrder.User, -amount, true) // Rollback
+	if !sm.cache1.SetBalance(sellOrder.User, -amount, false, false) {
+		sm.cache1.SetBalance(buyOrder.User, -amount, true, false) // Rollback
 		return false
 	}
 
 	// buyer's holdings
-	if !sm.cache2.SetStock(buyOrder.User, buyOrder.Id, tradeQuantity, tradePrice, false) {
-		sm.cache1.SetBalance(buyOrder.User, -amount, true) // Rollback
-		sm.cache1.SetBalance(sellOrder.User, amount, true)
+	if !sm.cache2.SetStock(buyOrder.User, buyOrder.Id, tradeQuantity, tradePrice, false, false) {
+		sm.cache1.SetBalance(buyOrder.User, -amount, true, false) // Rollback
+		sm.cache1.SetBalance(sellOrder.User, amount, true, false)
 		return false
 	}
 
 	// seller's holdings
-	if !sm.cache2.SetStock(sellOrder.User, sellOrder.Id, -tradeQuantity, tradePrice, false) {
-		sm.cache1.SetBalance(buyOrder.User, -amount, true) // Rollback
-		sm.cache1.SetBalance(sellOrder.User, amount, true)
-		sm.cache2.SetStock(buyOrder.User, buyOrder.Id, -tradeQuantity, tradePrice, true)
+	if !sm.cache2.SetStock(sellOrder.User, sellOrder.Id, -tradeQuantity, tradePrice, false, false) {
+		sm.cache1.SetBalance(buyOrder.User, -amount, true, false) // Rollback
+		sm.cache1.SetBalance(sellOrder.User, amount, true, false)
+		sm.cache2.SetStock(buyOrder.User, buyOrder.Id, -tradeQuantity, tradePrice, true, false)
 		return false
 	}
 
@@ -143,3 +143,36 @@ func min(a, b int) int {
 	}
 	return b
 }
+
+func (sm *StockManager) LeftSettlement(Ticker int) {
+    sm.mu.Lock()
+    defer sm.mu.Unlock()
+
+    // Clean buy Queue
+    for {
+        buyOrder := sm.BuyQueue.Peek()
+        if buyOrder == nil {
+            break
+        }
+
+        amount := buyOrder.Price * buyOrder.Quantity
+        if !sm.cache1.SetBalance(buyOrder.User, amount, false, true) {
+            fmt.Printf("Failed to update balance for user %d\n", buyOrder.User)
+        }
+		sm.BuyQueue.Pop() // Remove processed order
+    }
+
+    // Clean sell Queue
+    for {
+        sellOrder := sm.SellQueue.Peek()
+        if sellOrder == nil {
+            break
+        }
+
+        if !sm.cache2.SetStock(sellOrder.User, Ticker, sellOrder.Quantity, sellOrder.Price, false, true) {
+            fmt.Printf("Failed to update stock for user %d\n", sellOrder.User)
+        }
+		sm.SellQueue.Pop() // Remove processed order
+    }
+}
+
