@@ -6,6 +6,7 @@ type ExchangeMsg struct {
 	Ticker   int `json:"ticker,omitempty"`
 }
 
+
 type Order struct {
 	Id       int `json:"id"`
 	Ticker   int `json:"ticker"`

@@ -38,12 +38,10 @@
 
 // }
 
-
 // type ABCD struct {
 // 	Key   string
 // 	Value string
 // }
-
 
 // func ConnectCache() *redis.Client{
 // 	return redis.NewClient(&redis.Options{
@@ -80,7 +78,6 @@
 
 // 	client := ConnectCache()
 
-
 // 	_, err := client.Ping(ctx).Result()
 // 	if err != nil{
 // 		log.Fatalf("failed to connect to cache: %v", err)
@@ -97,14 +94,12 @@
 
 // }
 
-
 // // Let's Design how our system look like
 // // Exchange Class => StockManager[], addStock, removeStock
 // // StockManager Class => buyQueue, sellQueue, ownMatching Engine, settlements
 // // Main function => Which are doing orchestators, every connection done by here
 // // Subscriber Class => Which go lots of events, also filterout, and calling Exchange class based on event
 // // connectitvty class => Redis, Publisher also conncted to Main
-
 
 // package main
 
@@ -139,17 +134,31 @@
 // 	fmt.Printf("The balance for user %s is: %.2f\n", userId, balance)
 // }
 
-
 package main
 
 import (
 	"fmt"
-	"strconv"
+	// "time"
 )
 
+func hello() {
+	fmt.Println("hello")
+}
+
+// func main() {
+// 	go hello()
+// 	fmt.Println("main")
+// 	time.Sleep(1 *time.Second)
+// 	select {}
+// }
+
 func main() {
-	amount := -500
-	userBalance := strconv.FormatInt(int64(amount), 10)
-	fmt.Println(userBalance) // Output: "-500"
-	
+	myChannel := make(chan string)
+
+	go func(){
+		myChannel <- "data"
+	}()
+
+	msg := <-myChannel
+	fmt.Print(msg)
 }

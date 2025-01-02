@@ -9,6 +9,7 @@ import (
 	"project/pkg/pubsub"
 	"project/pkg/queue"
 	"sync"
+	"log"
 )
 
 type StockManager struct {
@@ -40,8 +41,10 @@ func (sm *StockManager) PlaceOrder(order *models.Order) {
 
 	if order.Type == 1 {
 		sm.BuyQueue.Enqueue(order)
+		log.Printf("BuyQueue: Quantity:%d  Price:%d", order.Quantity, order.Price)
 	} else if order.Type == 0 {
 		sm.SellQueue.Enqueue(order)
+		log.Printf("SellQueue: Quantity:%d  Price:%d", order.Quantity, order.Price)
 	}
 
 	go sm.MatchOrders()
@@ -57,6 +60,8 @@ func (sm *StockManager) MatchOrders() {
 
 		if buyOrder != nil && sellOrder != nil && buyOrder.Price >= sellOrder.Price {
 			tradeQuantity := min(buyOrder.Quantity, sellOrder.Quantity)
+
+			log.Printf("OrderMatched: Quantity:%d  Price:%d", tradeQuantity, sellOrder.Price)
 
 			success := sm.SettlePartialTrade(buyOrder, sellOrder, tradeQuantity, sellOrder.Price)
 			if success {
@@ -107,31 +112,32 @@ func (sm *StockManager) SettlePartialTrade(buyOrder, sellOrder *models.Order, tr
 	amount := tradePrice * tradeQuantity
 
 	// buyer's balance
-	if !sm.cache1.SetBalance(buyOrder.User, amount, false, false) {
+	if !sm.cache1.SetBalance(buyOrder.User, amount, "SellOrderDeductLockAmount") {
 		return false
 	}
 
 	// seller's balance
-	if !sm.cache1.SetBalance(sellOrder.User, -amount, false, false) {
-		sm.cache1.SetBalance(buyOrder.User, -amount, true, false) // Rollback
+	if !sm.cache1.SetBalance(sellOrder.User, amount, "SellOrderAddMoney") {
+		sm.cache1.SetBalance(buyOrder.User, amount, "BuyOrderRollback") // Rollback
 		return false
 	}
 
 	// buyer's holdings
 	if !sm.cache2.SetStock(buyOrder.User, buyOrder.Id, tradeQuantity, tradePrice, false, false) {
-		sm.cache1.SetBalance(buyOrder.User, -amount, true, false) // Rollback
-		sm.cache1.SetBalance(sellOrder.User, amount, true, false)
+		sm.cache1.SetBalance(buyOrder.User, amount, "BuyOrderRollback") // Rollback
+		sm.cache1.SetBalance(sellOrder.User, amount, "SellOrderRollback")
 		return false
 	}
 
 	// seller's holdings
 	if !sm.cache2.SetStock(sellOrder.User, sellOrder.Id, -tradeQuantity, tradePrice, false, false) {
-		sm.cache1.SetBalance(buyOrder.User, -amount, true, false) // Rollback
-		sm.cache1.SetBalance(sellOrder.User, amount, true, false)
+		sm.cache1.SetBalance(buyOrder.User, amount, "BuyOrderRollback") // Rollback
+		sm.cache1.SetBalance(sellOrder.User, amount, "SellOrderRollback")
 		sm.cache2.SetStock(buyOrder.User, buyOrder.Id, -tradeQuantity, tradePrice, true, false)
 		return false
 	}
 
+	log.Printf("Settlement:%d %d %d", sellOrder.Id, buyOrder.Id, sellOrder.Price)
 	sm.publishTradeEvent(buyOrder, sellOrder, tradeQuantity, tradePrice)
 
 	return true

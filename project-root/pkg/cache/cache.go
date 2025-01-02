@@ -90,18 +90,19 @@ func (c *Cache) GetStocks(userId int) ([]models.Stock, error) {
 
 	return stocks, nil
 }
+
 func (c *Cache) SetStock(userId int, tickerID int, quantity int, price int, rollback bool, settlement bool) bool {
 	client := c.GetRedisClient()
 	ctx := context.Background()
 
-	// retry mechanism parameters
-	retryDeadline := time.Now().Add(5 * time.Minute)
+	// Retry mechanism parameters
+	retryDeadline := time.Now().Add(5 * time.Second)
 	var locked bool
 	var err error
 
-	// Retry acquiring the lock until 1 minute has passed
+	// Retry acquiring the lock
 	for time.Now().Before(retryDeadline) {
-		locked, err = c.LockResource(userId, strconv.Itoa(tickerID), 5*time.Minute)
+		locked, err = c.LockResource(userId, strconv.Itoa(tickerID), 5*time.Second)
 		if err != nil {
 			fmt.Printf("Error acquiring lock: %v\n", err)
 			return false
@@ -109,20 +110,17 @@ func (c *Cache) SetStock(userId int, tickerID int, quantity int, price int, roll
 		if locked {
 			break
 		}
-
-		// Wait before retrying
 		fmt.Println("Resource is locked, retrying...")
-		time.Sleep(2 * time.Second) // Retry after 2 seconds
+		time.Sleep(2 * time.Second)
 	}
 
-	// If lock was not acquired within 1 minute, return error
+	// If lock was not acquired, return error
 	if !locked {
-		fmt.Println("Failed to acquire lock within 1 minute.")
+		fmt.Println("Failed to acquire lock within the retry deadline.")
 		return false
 	}
 
 	defer func() {
-		// lock is always released
 		if unlockErr := c.UnlockResource(userId, strconv.Itoa(tickerID)); unlockErr != nil {
 			fmt.Printf("Error releasing lock: %v\n", unlockErr)
 		}
@@ -130,128 +128,107 @@ func (c *Cache) SetStock(userId int, tickerID int, quantity int, price int, roll
 
 	// Retrieve current stock data
 	stocksStr, err := client.Get(ctx, strconv.Itoa(userId)).Result()
-	if err != nil {
-		if err == redis.Nil {
-			fmt.Printf("User's stock data not found: %d\n", userId)
-			return false
-		}
+	if err != nil && err != redis.Nil {
 		fmt.Printf("Error fetching user's stock data: %v\n", err)
 		return false
 	}
 
-	// Split the string by '.' to individual stock records
-	stockEntries := strings.Split(stocksStr, ".")
-
 	var updatedStocks []models.Stock
-	var stockUpdated bool
+	if stocksStr != "" {
+		// Process existing stock entries
+		stockEntries := strings.Split(stocksStr, ".")
+		var stockUpdated bool
 
-	// Iterate to each stock
-	for _, entry := range stockEntries {
-		// Split each stock record by ',' to extract fields
-		fields := strings.Split(entry, ",")
-		if len(fields) != 4 {
-			fmt.Printf("Invalid stock entry: %s\n", entry)
-			return false
-		}
-
-		field0, err := strconv.Atoi(fields[0]) // TickerID
-		if err != nil {
-			fmt.Printf("Invalid field0 in stock entry: %s\n", entry)
-			return false
-		}
-
-		field1, err := strconv.Atoi(fields[1]) // Quantity
-		if err != nil {
-			fmt.Printf("Invalid field1 in stock entry: %s\n", entry)
-			return false
-		}
-
-		field2, err := strconv.Atoi(fields[2]) // Locked Quantity (LQ)
-		if err != nil {
-			fmt.Printf("Invalid field2 in stock entry: %s\n", entry)
-			return false
-		}
-
-		field3, err := strconv.Atoi(fields[3]) // Price
-		if err != nil {
-			fmt.Printf("Invalid field3 in stock entry: %s\n", entry)
-			return false
-		}
-
-		// Check is the same stock we're updating
-		if field0 == tickerID {
-			var updatedStock models.Stock
-			if quantity < 0 && !rollback {
-				// Real Sell Order: Change in locked quantity, price remains same
-				updatedStock = models.Stock{
-					TickerID: field0,
-					Quantity: field1,
-					LQ:       field2 - quantity,
-					Price:    field3,
-				}
-			} else if quantity < 0 && rollback {
-				// Rollback Sell Order: Price Change, deduct Quantity
-				totalQuantity := field1
-				totalPrice := field3
-				newQuantity := totalQuantity - quantity
-				newPrice := (totalPrice*totalQuantity - quantity*price) / newQuantity
-
-				updatedStock = models.Stock{
-					TickerID: field0,
-					Quantity: newQuantity,
-					LQ:       field2,
-					Price:    newPrice,
-				}
-			} else if quantity > 0 && !rollback && settlement {
-				// settlement only add left quantity to main file
-				updatedStock = models.Stock{
-					TickerID: field0,
-					Quantity: field1 + quantity,
-					LQ:       field2 - quantity,
-					Price:    field3,
-				}
-			} else if quantity > 0 && !rollback {
-				// Buy Order: Change in price and main Quantity
-				newQuantity := field1 + quantity
-				newPrice := (field1*field3 + quantity*price) / newQuantity
-
-				updatedStock = models.Stock{
-					TickerID: field0,
-					Quantity: newQuantity,
-					LQ:       field2,
-					Price:    newPrice,
-				}
+		for _, entry := range stockEntries {
+			fields := strings.Split(entry, ",")
+			if len(fields) != 4 {
+				fmt.Printf("Invalid stock entry: %s\n", entry)
+				return false
 			}
 
-			updatedStocks = append(updatedStocks, updatedStock)
-			stockUpdated = true
-		} else {
-			// Keep the current stock unchanged if it's not the one being updated
-			updatedStocks = append(updatedStocks, models.Stock{
-				TickerID: field0,
-				Quantity: field1,
-				LQ:       field2,
-				Price:    field3,
-			})
+			field0, _ := strconv.Atoi(fields[0]) // TickerID
+			field1, _ := strconv.Atoi(fields[1]) // Quantity
+			field2, _ := strconv.Atoi(fields[2]) // Locked Quantity (LQ)
+			field3, _ := strconv.Atoi(fields[3]) // Price
+
+			if field0 == tickerID {
+				var updatedStock models.Stock
+				if quantity < 0 && !rollback {
+					// Real Sell Order: Change in locked quantity, price remains same
+					updatedStock = models.Stock{
+						TickerID: field0,
+						Quantity: field1,
+						LQ:       field2 - quantity,
+						Price:    field3,
+					}
+				} else if quantity < 0 && rollback {
+					// Rollback Sell Order: Price Change, deduct Quantity
+					totalQuantity := field1
+					totalPrice := field3
+					newQuantity := totalQuantity - quantity
+					newPrice := (totalPrice*totalQuantity - quantity*price) / newQuantity
+
+					updatedStock = models.Stock{
+						TickerID: field0,
+						Quantity: newQuantity,
+						LQ:       field2,
+						Price:    newPrice,
+					}
+				} else if quantity > 0 && !rollback && settlement {
+					// settlement only add left quantity to main file
+					updatedStock = models.Stock{
+						TickerID: field0,
+						Quantity: field1 + quantity,
+						LQ:       field2 - quantity,
+						Price:    field3,
+					}
+				} else if quantity > 0 && !rollback {
+					// Buy Order: Change in price and main Quantity
+					newQuantity := field1 + quantity
+					newPrice := (field1*field3 + quantity*price) / newQuantity
+
+					updatedStock = models.Stock{
+						TickerID: field0,
+						Quantity: newQuantity,
+						LQ:       field2,
+						Price:    newPrice,
+					}
+				}
+
+				updatedStocks = append(updatedStocks, updatedStock)
+				stockUpdated = true
+			} else {
+				// Keep the current stock unchanged if it's not the one being updated
+				updatedStocks = append(updatedStocks, models.Stock{
+					TickerID: field0,
+					Quantity: field1,
+					LQ:       field2,
+					Price:    field3,
+				})
+			}
 		}
 
+		if !stockUpdated {
+			fmt.Printf("Stock not found: %d\n", tickerID)
+			return false
+		}
+	} else {
+		// Add a new stock entry
+		updatedStocks = append(updatedStocks, models.Stock{
+			TickerID: tickerID,
+			Quantity: quantity,
+			LQ:       0,
+			Price:    price,
+		})
 	}
 
-	if !stockUpdated {
-		fmt.Printf("Stock not found: %d\n", tickerID)
-		return false
-	}
-
-	// Prepare updated stock string
+	// Prepare and store updated stock data
 	var updatedStockEntries []string
 	for _, stock := range updatedStocks {
-		stockEntry := fmt.Sprintf("%d,%d,%d,%d", stock.TickerID, stock.Quantity, stock.LQ, stock.Price)
-		updatedStockEntries = append(updatedStockEntries, stockEntry)
+		updatedStockEntries = append(updatedStockEntries, fmt.Sprintf("%d,%d,%d,%d", stock.TickerID, stock.Quantity, stock.LQ, stock.Price))
 	}
 
-	// Store the updated stock data back to Redis
-	updatedStockStr := strings.Join(updatedStockEntries, ".")
-	_, err = client.Set(ctx, strconv.Itoa(userId), updatedStockStr, 0).Result()
+	_, err = client.Set(ctx, strconv.Itoa(userId), strings.Join(updatedStockEntries, "."), 0).Result()
 	if err != nil {
 		fmt.Printf("Error saving updated stock data: %v\n", err)
 		return false
@@ -292,18 +269,18 @@ func (c *Cache) GetBalance(userId int) (int, int, error) {
 	return int(currentAmount), int(lockedAmount), nil
 }
 
-func (c *Cache) SetBalance(userId int, amount int, rollback bool, settlement bool) bool {
+func (c *Cache) SetBalance(userId int, amount int, caseType string) bool {
 	client := c.GetRedisClient()
 	ctx := context.Background()
 
 	// retry mechanism parameters
-	retryDeadline := time.Now().Add(5 * time.Minute)
+	retryDeadline := time.Now().Add(5 * time.Second)
 	var locked bool
 	var err error
 
 	// Retry acquiring the lock until 5 minutes
 	for time.Now().Before(retryDeadline) {
-		locked, err = c.LockResource(userId, "balance", 5*time.Minute)
+		locked, err = c.LockResource(userId, "balance", 5*time.Second)
 		if err != nil {
 			fmt.Printf("Error acquiring lock: %v\n", err)
 			return false
@@ -319,7 +296,7 @@ func (c *Cache) SetBalance(userId int, amount int, rollback bool, settlement boo
 
 	// If lock was not acquired within 5 minutes, return error
 	if !locked {
-		fmt.Println("Failed to acquire lock within 5 minutes.")
+		fmt.Println("Failed to acquire lock within 5 second.")
 		return false
 	}
 
@@ -364,27 +341,77 @@ func (c *Cache) SetBalance(userId int, amount int, rollback bool, settlement boo
 	var newAmount int
 	var newLockedAmount int
 
-	if amount < 0 && !rollback {
-		// sell Order: add amount
+	switch {
+	case caseType == "SellOrderAddMoney":
 		newAmount = currentAmount + amount
-	} else if amount < 0 && rollback {
-		// buy Order Rollback: add to lockAmount
-		newLockedAmount = lockedAmount + amount
-	} else if amount > 0 && !rollback {
-		// buy Order: less to lockAmount
-		newLockedAmount = lockedAmount - amount
-	} else if amount > 0 && rollback {
-		// sell Order Rollback: deduct amount
+		newLockedAmount = lockedAmount
+	case caseType == "SellOrderRollback":
 		newAmount = currentAmount - amount
-	} else if amount > 0 && !rollback && settlement {
-		//  buyer's Settlement => lock remove and add money to main balance
+		newLockedAmount = lockedAmount
+	case caseType == "BuyOrderRollback":
+		newLockedAmount = lockedAmount + amount
+		newAmount = currentAmount
+	case caseType == "SellOrderDeductLockAmount":
+		newLockedAmount = lockedAmount - amount
+		newAmount = currentAmount
+	case caseType == "BuyerSettlement":
 		newAmount = currentAmount + amount
 		newLockedAmount = lockedAmount - amount
-	} else if amount > 0 && rollback && settlement {
-		//  buyer's Settlement Rollback => lock remove and add money to main balance
+	case caseType == "BuyerSettlementRollback":
 		newAmount = currentAmount - amount
 		newLockedAmount = lockedAmount + amount
 	}
+
+	// if amount < 0 && !rollback {
+	// 	// sell Order: add amount
+	// 	newAmount = currentAmount + amount
+	// } else if amount < 0 && rollback {
+	// 	// buy Order Rollback: add to lockAmount
+	// 	newLockedAmount = lockedAmount + amount
+	// } else if amount > 0 && !rollback {
+	// 	// buy Order: less to lockAmount
+	// 	newLockedAmount = lockedAmount - amount
+	// } else if amount > 0 && rollback {
+	// 	// sell Order Rollback: deduct amount
+	// 	newAmount = currentAmount - amount
+	// } else if amount > 0 && !rollback && settlement {
+	// 	//  buyer's Settlement => lock remove and add money to main balance
+	// 	newAmount = currentAmount + amount
+	// 	newLockedAmount = lockedAmount - amount
+	// } else if amount > 0 && rollback && settlement {
+	// 	//  buyer's Settlement Rollback => lock remove and add money to main balance
+	// 	newAmount = currentAmount - amount
+	// 	newLockedAmount = lockedAmount + amount
+	// }
+	// if amount < 0 {
+	// 	if !rollback {
+	// 		// Sell Order: add amount
+	// 		newAmount = currentAmount + amount
+	// 	} else {
+	// 		// Buy Order Rollback: add to lockAmount
+	// 		newLockedAmount = lockedAmount + amount
+	// 	}
+	// } else if amount > 0 {
+	// 	if !rollback {
+	// 		if settlement {
+	// 			// Buy Order with Settlement: remove from lockAmount and add to main balance
+	// 			newAmount = currentAmount + amount
+	// 			newLockedAmount = lockedAmount - amount
+	// 		} else {
+	// 			// Buy Order: reduce from lockAmount
+	// 			newLockedAmount = lockedAmount - amount
+	// 		}
+	// 	} else {
+	// 		if settlement {
+	// 			// Buy Order Rollback with Settlement: add to lockAmount and deduct from main balance
+	// 			newAmount = currentAmount - amount
+	// 			newLockedAmount = lockedAmount + amount
+	// 		} else {
+	// 			// Sell Order Rollback: deduct amount
+	// 			newAmount = currentAmount - amount
+	// 		}
+	// 	}
+	// }
 
 	updatedBalance := fmt.Sprintf("%d,%d", newAmount, newLockedAmount)
 	_, err = client.Set(ctx, key, updatedBalance, 0).Result()
@@ -442,3 +469,180 @@ func (c *Cache) InitializeBalance(userId int, balanceStr string) {
 	fmt.Printf("Initialized data for user %d\n", userId)
 }
 
+// func (c *Cache) SetStock(userId int, tickerID int, quantity int, price int, rollback bool, settlement bool) bool {
+// 	client := c.GetRedisClient()
+// 	ctx := context.Background()
+
+// 	// retry mechanism parameters
+// 	retryDeadline := time.Now().Add(5 * time.Minute)
+// 	var locked bool
+// 	var err error
+
+// 	// Retry acquiring the lock until 1 minute has passed
+// 	for time.Now().Before(retryDeadline) {
+// 		locked, err = c.LockResource(userId, strconv.Itoa(tickerID), 5*time.Minute)
+// 		if err != nil {
+// 			fmt.Printf("Error acquiring lock: %v\n", err)
+// 			return false
+// 		}
+// 		if locked {
+// 			break
+// 		}
+
+// 		// Wait before retrying
+// 		fmt.Println("Resource is locked, retrying...")
+// 		time.Sleep(2 * time.Second) // Retry after 2 seconds
+// 	}
+
+// 	// If lock was not acquired within 1 minute, return error
+// 	if !locked {
+// 		fmt.Println("Failed to acquire lock within 1 minute.")
+// 		return false
+// 	}
+
+// 	defer func() {
+// 		// lock is always released
+// 		if unlockErr := c.UnlockResource(userId, strconv.Itoa(tickerID)); unlockErr != nil {
+// 			fmt.Printf("Error releasing lock: %v\n", unlockErr)
+// 		}
+// 	}()
+
+// 	// Retrieve current stock data
+// 	stocksStr, err := client.Get(ctx, strconv.Itoa(userId)).Result()
+// 	if err != nil {
+// 		if err == redis.Nil {
+// 			fmt.Printf("User's stock data not found: %d\n", userId)
+// 			return false
+// 		}
+// 		fmt.Printf("Error fetching user's stock data: %v\n", err)
+// 		return false
+// 	}
+
+// 	if stocksStr == "" {
+// 		updatedStocks = append(updatedStocks, models.Stock{
+// 			TickerID: field0,
+// 			Quantity: field1,
+// 			LQ:       field2,
+// 			Price:    field3,
+// 		})
+// 	}
+// 	// Split the string by '.' to individual stock records
+// 	stockEntries := strings.Split(stocksStr, ".")
+
+// 	var updatedStocks []models.Stock
+// 	var stockUpdated bool
+
+// 	// Iterate to each stock
+// 	for _, entry := range stockEntries {
+// 		// Split each stock record by ',' to extract fields
+// 		fields := strings.Split(entry, ",")
+// 		if len(fields) != 4 {
+// 			fmt.Printf("Invalid stock entry: %s\n", entry)
+// 			return false
+// 		}
+
+// 		field0, err := strconv.Atoi(fields[0]) // TickerID
+// 		if err != nil {
+// 			fmt.Printf("Invalid field0 in stock entry: %s\n", entry)
+// 			return false
+// 		}
+
+// 		field1, err := strconv.Atoi(fields[1]) // Quantity
+// 		if err != nil {
+// 			fmt.Printf("Invalid field1 in stock entry: %s\n", entry)
+// 			return false
+// 		}
+
+// 		field2, err := strconv.Atoi(fields[2]) // Locked Quantity (LQ)
+// 		if err != nil {
+// 			fmt.Printf("Invalid field2 in stock entry: %s\n", entry)
+// 			return false
+// 		}
+
+// 		field3, err := strconv.Atoi(fields[3]) // Price
+// 		if err != nil {
+// 			fmt.Printf("Invalid field3 in stock entry: %s\n", entry)
+// 			return false
+// 		}
+
+// 		// Check is the same stock we're updating
+// 		if field0 == tickerID {
+// 			var updatedStock models.Stock
+// 			if quantity < 0 && !rollback {
+// 				// Real Sell Order: Change in locked quantity, price remains same
+// 				updatedStock = models.Stock{
+// 					TickerID: field0,
+// 					Quantity: field1,
+// 					LQ:       field2 - quantity,
+// 					Price:    field3,
+// 				}
+// 			} else if quantity < 0 && rollback {
+// 				// Rollback Sell Order: Price Change, deduct Quantity
+// 				totalQuantity := field1
+// 				totalPrice := field3
+// 				newQuantity := totalQuantity - quantity
+// 				newPrice := (totalPrice*totalQuantity - quantity*price) / newQuantity
+
+// 				updatedStock = models.Stock{
+// 					TickerID: field0,
+// 					Quantity: newQuantity,
+// 					LQ:       field2,
+// 					Price:    newPrice,
+// 				}
+// 			} else if quantity > 0 && !rollback && settlement {
+// 				// settlement only add left quantity to main file
+// 				updatedStock = models.Stock{
+// 					TickerID: field0,
+// 					Quantity: field1 + quantity,
+// 					LQ:       field2 - quantity,
+// 					Price:    field3,
+// 				}
+// 			} else if quantity > 0 && !rollback {
+// 				// Buy Order: Change in price and main Quantity
+// 				newQuantity := field1 + quantity
+// 				newPrice := (field1*field3 + quantity*price) / newQuantity
+
+// 				updatedStock = models.Stock{
+// 					TickerID: field0,
+// 					Quantity: newQuantity,
+// 					LQ:       field2,
+// 					Price:    newPrice,
+// 				}
+// 			}
+
+// 			updatedStocks = append(updatedStocks, updatedStock)
+// 			stockUpdated = true
+// 		} else {
+// 			// Keep the current stock unchanged if it's not the one being updated
+// 			updatedStocks = append(updatedStocks, models.Stock{
+// 				TickerID: field0,
+// 				Quantity: field1,
+// 				LQ:       field2,
+// 				Price:    field3,
+// 			})
+// 		}
+
+// 	}
+
+// 	if !stockUpdated {
+// 		fmt.Printf("Stock not found: %d\n", tickerID)
+// 		return false
+// 	}
+
+// 	// Prepare updated stock string
+// 	var updatedStockEntries []string
+// 	for _, stock := range updatedStocks {
+// 		stockEntry := fmt.Sprintf("%d,%d,%d,%d", stock.TickerID, stock.Quantity, stock.LQ, stock.Price)
+// 		updatedStockEntries = append(updatedStockEntries, stockEntry)
+// 	}
+
+// 	// Store the updated stock data back to Redis
+// 	updatedStockStr := strings.Join(updatedStockEntries, ".")
+// 	_, err = client.Set(ctx, strconv.Itoa(userId), updatedStockStr, 0).Result()
+// 	if err != nil {
+// 		fmt.Printf("Error saving updated stock data: %v\n", err)
+// 		return false
+// 	}
+
+// 	return true
+// }

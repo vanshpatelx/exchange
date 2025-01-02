@@ -1,185 +1,101 @@
-package cache
+package cache_test
 
 import (
-	"testing"
-	"project/pkg/models"
-	// "sync"
-	"strings"
+	"context"
 	"fmt"
-	"log"
-	"project/pkg/config"
+	"project/pkg/cache"
+	"project/pkg/models"
+	"testing"
+
+	"os"
+
+	"github.com/stretchr/testify/assert"
 )
 
-func setupTestCache() (cache1, cache2 *Cache) {
-	config, err := config.LoadConfig()
-	if err != nil {
-		log.Fatalf("Failed to load configuration: %v", err)
-	}
+const (
+	redisURL  = "localhost:6379" // Replace with your Redis URL if different
+	redisURL2 = "localhost:6380"
+)
 
-	cache1 = NewCache(config.REDIS_URL1)
-	cache2 = NewCache(config.REDIS_URL2)
-
-	cache1.initRedisClient()
-	cache2.initRedisClient()
-	return cache1, cache2
+func setupCache() (c1, c2 *cache.Cache) {
+	c1 = cache.NewCache(redisURL)
+	c2 = cache.NewCache(redisURL2)
+	c2.InitializeStock(1, "101,50,10,10000")
+	c1.InitializeBalance(1, "10000000,10000")
+	return c1, c2
 }
 
-func TestNewStockAdd(t *testing.T) {
-	_, cache2 := setupTestCache()
+func TestCacheOperations(t *testing.T) {
+	c1, c2 := setupCache()
+	defer func() {
+		c1.GetRedisClient().FlushAll(context.Background()) // Clean up after tests
+		c2.GetRedisClient().FlushAll(context.Background()) // Clean up after tests
+	}()
 
-	// Initialize data
-	stocks := []models.Stock{
-		{TickerID: 1, Quantity: 100, LQ: 50, Price: 200},
-		{TickerID: 2, Quantity: 200, LQ: 100, Price: 150},
-		{TickerID: 3, Quantity: 100, LQ: 50, Price: 200},
-	}
+	t.Run("Test GetStocks", func(t *testing.T) {
+		stocks, err := c2.GetStocks(1)
+		assert.NoError(t, err)
+		assert.Equal(t, 1, len(stocks))
 
-	// Build the string for stocks data
-	var stockBuilder strings.Builder
-	for _, stock := range stocks {
-		// Format each stock entry as "TickerID,Quantity,LQ,Price"
-		stockStr := fmt.Sprintf("%d,%d,%d,%d", stock.TickerID, stock.Quantity, stock.LQ, stock.Price)
-		stockBuilder.WriteString(stockStr + ".")
-	}
+		expectedStock := models.Stock{TickerID: 101, Quantity: 50, LQ: 10, Price: 10000}
+		assert.Equal(t, expectedStock, stocks[0])
+	})
 
-	// Remove the last period (not a comma)
-	result := stockBuilder.String()
-	if len(result) > 0 {
-		result = result[:len(result)-1] // Removing the last period instead of comma
-	}
+	t.Run("Test SetStock Add Quantity", func(t *testing.T) {
+		success := c2.SetStock(1, 101, 10, 10500, false, false)
+		assert.True(t, success)
 
-	fmt.Print(result)
+		stocks, err := c2.GetStocks(1)
+		assert.NoError(t, err)
+		assert.Equal(t, 1, len(stocks))
 
-	// Set initial balances
-	currentBalance := 10000
-	lockedBalance := 5000
-	balanceStr := fmt.Sprintf("%d,%d", currentBalance, lockedBalance)
+		expectedStock := models.Stock{TickerID: 101, Quantity: 60, LQ: 10, Price: 10083}
+		assert.Equal(t, expectedStock, stocks[0])
+	})
 
-	userId := 1
-	cache1.InitializeData(userId, result)
+	t.Run("Test SetBalance Add Amount", func(t *testing.T) {
+		amountToCheck := 20000
 
-	// Modify stock data
-	stockModify := []models.Stock{
-		{TickerID: 1, Quantity: 50, Price: 100},
-		{TickerID: 2, Quantity: 100, Price: 100},
-		{TickerID: 3, Quantity: 20, Price: 50},
-	}
+		currentAmountInitially, lockedAmountInitially, err := c1.GetBalance(1)
+		assert.NoError(t, err)
+		success := c1.SetBalance(1, amountToCheck, "SellOrderAddMoney")
+		assert.True(t, success)
 
-	// Set modified stocks data in cache
-	for _, stock := range stockModify {
-		success := cache.SetStock(userId, stock.TickerID, stock.Quantity, stock.Price, false, false)
-		if !success {
-			t.Errorf("Failed to set stock data for TickerID %d", stock.TickerID)
-		}
-	}
+		currentAmount, lockedAmount, err := c1.GetBalance(1)
+		assert.NoError(t, err)
+		assert.Equal(t, currentAmountInitially+amountToCheck, currentAmount)
+		assert.Equal(t, lockedAmountInitially, lockedAmount)
+	})
 
-	// Retrieve and validate stocks
-	retrievedStocks, err := cache.GetStocks(userId)
-	if err != nil {
-		t.Errorf("Failed to retrieve stocks: %v", err)
-	}
+	// t.Run("Test SetStock Rollback", func(t *testing.T) {
+	// 	success := c2.SetStock(1, 101, -10, 95, true, false)
+	// 	assert.True(t, success)
 
-	if len(retrievedStocks) != len(stockModify) { // Correctly compare the modified stocks
-		t.Errorf("Expected %d stocks, got %d", len(stockModify), len(retrievedStocks))
-	}
+	// 	stocks, err := c2.GetStocks(1)
+	// 	assert.NoError(t, err)
+	// 	assert.Equal(t, 1, len(stocks))
 
-	for i, stock := range stockModify {
-		if stock.TickerID != retrievedStocks[i].TickerID ||
-			stock.Quantity != retrievedStocks[i].Quantity ||
-			stock.LQ != retrievedStocks[i].LQ ||
-			stock.Price != retrievedStocks[i].Price {
-			t.Errorf("Stock mismatch at index %d: expected %+v, got %+v", i, stock, retrievedStocks[i])
-		}
-	}
+	// 	expectedStock := models.Stock{TickerID: 101, Quantity: 50, LQ: 20, Price: 100}
+	// 	assert.Equal(t, expectedStock, stocks[0])
+	// })
 
-	// Set balance data for user 1
-	success := cache.SetBalance(userId+1, 1000, false, true)
-	if !success {
-		t.Errorf("Failed to set balance for user %d", userId+1)
-	}
+	// t.Run("Test SetBalance Rollback", func(t *testing.T) {
+	// 	success := c1.SetBalance(1, -100)
+	// 	assert.True(t, success)
 
-	// Retrieve and validate balance
-	balance, locked, err := cache.GetBalance(userId+1)
-	if err != nil {
-		t.Errorf("Failed to retrieve balance: %v", err)
-	}
+	// 	currentAmount, lockedAmount, err := c1.GetBalance(1)
+	// 	assert.NoError(t, err)
+	// 	assert.Equal(t, 1200, currentAmount) // Adjusted expected value
+	// 	assert.Equal(t, 0, lockedAmount)
+	// })
 
-	// Corrected balance check
-	if balance != currentBalance+1000 {
-		t.Errorf("Expected balance %d, got %d", currentBalance+1000, balance)
-	}
-
-	if locked != lockedBalance {
-		t.Errorf("Expected locked balance %d, got %d", lockedBalance, locked)
-	}
 }
 
-// func TestConcurrency(t *testing.T) {
-// 	cache := setupTestCache()
+func BenchmarkCacheOperations(b *testing.B) {
+	c1, c2 := setupCache()
 
-// 	// Initialize stocks for user 1
-// 	userId := 1
-// 	stocks := []models.Stock{
-// 		{TickerID: 101, Quantity: 100, LQ: 50, Price: 200},
-// 		{TickerID: 102, Quantity: 200, LQ: 100, Price: 150},
-// 	}
-
-// 	// Set stocks data in cache
-// 	for _, stock := range stocks {
-// 		success := cache.SetStock(userId, stock.TickerID, stock.Quantity, stock.Price, false, false)
-// 		if !success {
-// 			t.Errorf("Failed to set stock data for TickerID %d", stock.TickerID)
-// 		}
-// 	}
-
-// 	// Set initial balance data for user 1
-// 	cache.SetBalance(userId, 1000, false, false)
-
-// 	var wg sync.WaitGroup
-
-// 	// Perform concurrent updates on stocks and balance
-// 	for i := 0; i < 10; i++ {
-// 		wg.Add(1)
-// 		go func(i int) {
-// 			defer wg.Done()
-
-// 			// Simulate a stock update
-// 			tickerID := 101
-// 			quantity := 10
-// 			price := 250
-// 			success := cache.SetStock(userId, tickerID, quantity, price, false, false)
-// 			if !success {
-// 				t.Errorf("Failed to update stock data for TickerID %d", tickerID)
-// 			}
-
-// 			// Simulate a balance update
-// 			amount := 50
-// 			success = cache.SetBalance(userId, amount, false, false)
-// 			if !success {
-// 				t.Errorf("Failed to update balance for user %d", userId)
-// 			}
-// 		}(i)
-// 	}
-
-// 	// Wait for all goroutines to finish
-// 	wg.Wait()
-
-// 	// Validate final stock and balance data
-// 	retrievedStocks, err := cache.GetStocks(userId)
-// 	if err != nil {
-// 		t.Errorf("Failed to retrieve stocks: %v", err)
-// 	}
-
-// 	if len(retrievedStocks) != len(stocks) {
-// 		t.Errorf("Expected %d stocks, got %d", len(stocks), len(retrievedStocks))
-// 	}
-
-// 	balance, err := cache.GetBalance(userId)
-// 	if err != nil {
-// 		t.Errorf("Failed to retrieve balance: %v", err)
-// 	}
-
-// 	if balance <= 0 {
-// 		t.Errorf("Balance should be greater than 0, got %d", balance)
-// 	}
-// }
+	for i := 0; i < b.N; i++ {
+		c2.SetStock(1, 101, 10, 105, false, false)
+		c1.SetBalance(1, 200, "SellOrderAddMoney")
+	}
+}

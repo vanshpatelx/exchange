@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -30,7 +29,7 @@ func main() {
 
 	exchangeInstance := exchange.NewExchange(pubsubInstance, cacheInstance1, cacheInstance2, config)
 
-	go subscribeToAddOrderMatchQueue(pubsubInstance, exchangeInstance, config)
+	subscribeToAddOrderMatchQueue(pubsubInstance, exchangeInstance, config)
 
 	gracefulShutdown()
 }
@@ -60,16 +59,15 @@ func processOrderMessage(msgBody []byte, exchangeInstance *exchange.Exchange) {
 	switch exchangeMsg.Task {
 	case 0:
 		// Place an order
-		exchangeInstance.PlaceOrder(&exchangeMsg.Order)
+		log.Printf("Order received for order ID: %d", exchangeMsg.Order.Id)
+		go exchangeInstance.PlaceOrder(&exchangeMsg.Order)
 	case 1:
 		// Handle settlement
-		exchangeInstance.Settlement(exchangeMsg.Ticker)
 		log.Printf("Settlement task received for order ID: %d", exchangeMsg.Order.Id)
+		go exchangeInstance.Settlement(exchangeMsg.Ticker)
 	default:
 		log.Printf("Unknown task type: %d", exchangeMsg.Task)
 	}
-
-	fmt.Printf("Processed order for stock: %d, User: %d, Quantity: %d, Type: %d\n", exchangeMsg.Order.Ticker, exchangeMsg.Order.User, exchangeMsg.Order.Quantity, exchangeMsg.Order.Type)
 }
 
 

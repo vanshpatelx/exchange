@@ -6,6 +6,7 @@ import (
 	"project/pkg/pubsub"
 	"project/pkg/stockmanager"
 	"sync"
+	"log"
 )
 
 type Exchange struct {
@@ -28,9 +29,6 @@ func NewExchange(pubsub *pubsub.PubSub, cache1 *cache.Cache, cache2 *cache.Cache
 }
 
 func (e *Exchange) AddStock(Ticker int) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
 	if _, exists := e.StockManagers[Ticker]; !exists {
 		e.StockManagers[Ticker] = stockmanager.NewStockManager(Ticker, e.cache1, e.cache2, e.pubsub, e.config)
 	}
@@ -38,15 +36,15 @@ func (e *Exchange) AddStock(Ticker int) {
 
 func (e *Exchange) PlaceOrder(order *models.Order) {
 	e.mu.Lock()
-
 	if manager, exists := e.StockManagers[order.Ticker]; exists {
-		go manager.PlaceOrder(order)
+		manager.PlaceOrder(order)
 	} else {
 		e.AddStock(order.Ticker)
 		manager := e.StockManagers[order.Ticker]
 		go manager.PlaceOrder(order)
+		log.Printf("Added Stock:%d", order.Ticker)
 	}
-
+	log.Printf("PlaceOrder: Quantity:%d  Price:%d", order.Quantity, order.Price)
 	e.mu.Unlock()
 }
 
