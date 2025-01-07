@@ -7,7 +7,8 @@ A high-performance exchange system built in **Go** with support for **LIMIT** an
 - **Total Orders Processed**: 2,786,035 orders  
 - **Total Time**: 1.984 seconds  
 - **Orders per Second**:  
-  \(\frac{2,786,035 \text{ orders}}{1.984 \text{ seconds}} \approx 1,404,040 \text{ orders/second}\)  
+   Approximately 1,404,040 orders, calculated by dividing 2,786,035 orders by 1.984 seconds.
+
 
 Based on the benchmark output, the system processes approximately **1.4 million orders per second**.
 
