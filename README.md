@@ -1,18 +1,20 @@
-# Exchange
+## Exchange
 
-Builded Exchange in GOLang with features like LIMIT, MARKET Orders, with concurrency.
+A high-performance exchange system built in **Go** with support for **LIMIT** and **MARKET** orders, designed for concurrent processing.
 
-![Img](http://github/com/img/bench)
-Total orders = 2,786,035 orders.
-Total time = 1.984 seconds.
-Orders per second = 2,786,035 orders / 1.984 seconds ≈ 1,404,040 orders per second.
+![Benchmark Image](https://github.com/vanshpatelx/exchange/blob/main/img/bench.png)
 
-Based on the benchmark output, you are processing approximately bold(1.4 million orders per second).
+- **Total Orders Processed**: 2,786,035 orders  
+- **Total Time**: 1.984 seconds  
+- **Orders per Second**:  
+  \(\frac{2,786,035 \text{ orders}}{1.984 \text{ seconds}} \approx 1,404,040 \text{ orders/second}\)  
 
+Based on the benchmark output, the system processes approximately **1.4 million orders per second**.
 
-Detailed benchmarks
-1. CPU Usgae
-![Img](http://github/com/img/bench)
+### Detailed Benchmarks
 
-2. Meonry Usaghe
-![Img](http://github/com/img/bench)
+1. **CPU Usage**  
+   ![CPU Usage](https://github.com/vanshpatelx/exchange/blob/main/img/cpu.png)
+
+2. **Memory Usage**  
+   ![Memory Usage](https://github.com/vanshpatelx/exchange/blob/main/img/memory.png)
