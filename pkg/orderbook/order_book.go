@@ -2,7 +2,7 @@ package orderbook
 
 import (
 	"container/heap"
-	"fmt"
+	// "fmt"
 	"sync"
 )
 
@@ -26,10 +26,10 @@ func (ob *OrderBook) AddOrder(order *Order) {
 	defer ob.mu.Unlock()
 
 	if !order.Type { // MARKET
-		fmt.Print("\nMARKET", order)
+		// fmt.Print("\nMARKET", order)
 		ob.matchMarketOrder(order)
 	} else { // LIMIT
-		fmt.Print("\nLIMIT", order)
+		// fmt.Print("\nLIMIT", order)
 		ob.addLimitOrder(order)
 	}
 }
@@ -104,13 +104,13 @@ func (ob *OrderBook) matchLimitOrder(order *Order, oppositeSide []*PriorityQueue
 					if existingOrder.Quantity <= order.Quantity {
 						order.Quantity -= existingOrder.Quantity
 						bestLevel.RemoveOrder(existingOrder.ID)
-						fmt.Printf("Trade complete: Order ID %d and Order ID %d, Quantity: %d, Price: %d\n",
-							existingOrder.ID, order.ID, existingOrder.Quantity, bestLevel.Price)
+						// fmt.Printf("Trade complete: Order ID %d and Order ID %d, Quantity: %d, Price: %d\n",
+						// 	existingOrder.ID, order.ID, existingOrder.Quantity, bestLevel.Price)
 					} else {
 						// Partial match
 						existingOrder.Quantity -= order.Quantity
-						fmt.Printf("Trade complete: Order ID %d and Order ID %d, Quantity: %d, Price: %d\n",
-							existingOrder.ID, order.ID, order.Quantity, bestLevel.Price)
+						// fmt.Printf("Trade complete: Order ID %d and Order ID %d, Quantity: %d, Price: %d\n",
+							// existingOrder.ID, order.ID, order.Quantity, bestLevel.Price)
 						order.Quantity = 0
 					}
 				}
@@ -156,12 +156,12 @@ func (ob *OrderBook) matchMarketOrder(order *Order) {
 			if existingOrder.Quantity <= order.Quantity {
 				order.Quantity -= existingOrder.Quantity
 				bestLevel.RemoveOrder(existingOrder.ID)
-				fmt.Printf("Trade complete: Order ID %d and Order ID %d, Quantity: %d, Price: %d\n",
-					existingOrder.ID, order.ID, existingOrder.Quantity, bestLevel.Price)
+				// fmt.Printf("Trade complete: Order ID %d and Order ID %d, Quantity: %d, Price: %d\n",
+				// 	existingOrder.ID, order.ID, existingOrder.Quantity, bestLevel.Price)
 			} else {
 				existingOrder.Quantity -= order.Quantity
-				fmt.Printf("Trade complete: Order ID %d and Order ID %d, Quantity: %d, Price: %d\n",
-					existingOrder.ID, order.ID, order.Quantity, bestLevel.Price)
+				// fmt.Printf("Trade complete: Order ID %d and Order ID %d, Quantity: %d, Price: %d\n",
+				// 	existingOrder.ID, order.ID, order.Quantity, bestLevel.Price)
 				order.Quantity = 0
 
 			}
